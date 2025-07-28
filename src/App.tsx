@@ -9,6 +9,9 @@ import { Home } from "./pages/Home";
 import { Report } from "./pages/Report";
 import { Token } from "./pages/Token";
 import { Chat } from "./pages/Chat";
+import { Resources } from "./pages/Resources";
+import { Admin } from "./pages/Admin";
+import { TokenManager } from "./pages/TokenManager";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,6 +29,9 @@ const App = () => (
               <Route path="/report" element={<Report />} />
               <Route path="/token" element={<Token />} />
               <Route path="/chat" element={<Chat />} />
+              <Route path="/resources" element={<Resources />} />
+              <Route path="/tokens" element={<TokenManager />} />
+              <Route path="/admin" element={<Admin />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Layout>
