@@ -62,14 +62,14 @@ export const TokenGenerator: React.FC<TokenGeneratorProps> = ({
   }
 
   return (
-    <Card className={`shadow-medium bg-gradient-card border-0 ${className}`}>
+    <Card className={`card-elevated ${className}`}>
       <CardHeader>
-        <CardTitle className="flex items-center space-x-2">
-          <Shield className="h-5 w-5 text-primary" />
-          <span>Token Generator</span>
-        </CardTitle>
-        <CardDescription>
-          Generate secure anonymous tokens for student access
+        <div className="flex items-center justify-center w-16 h-16 bg-primary/10 rounded-full mx-auto mb-4">
+          <Shield className="h-8 w-8 text-primary" />
+        </div>
+        <CardTitle className="text-center text-2xl">Token Generator</CardTitle>
+        <CardDescription className="text-center text-base">
+          Generate secure anonymous tokens for confidential chat access
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -110,14 +110,18 @@ export const TokenGenerator: React.FC<TokenGeneratorProps> = ({
 
         {/* Token Display */}
         {currentToken && (
-          <div className="space-y-3">
-            <div className="bg-muted/50 p-4 rounded-lg border-2 border-dashed border-primary/30">
+          <div className="space-y-4">
+            <div className="bg-gradient-card p-6 rounded-xl border-2 border-primary/20 shadow-medium">
               <div className="text-center">
-                <div className="text-2xl font-mono font-bold text-primary mb-2 tracking-widest">
+                <div className="inline-flex items-center gap-2 bg-primary/10 px-3 py-1 rounded-full text-sm font-medium mb-3">
+                  <Shield className="h-4 w-4 text-primary" />
+                  Your Anonymous Token
+                </div>
+                <div className="text-3xl font-mono font-bold text-primary mb-3 tracking-widest bg-white/80 p-4 rounded-lg">
                   {currentToken}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Generated token - valid for 48 hours
+                <p className="text-sm text-muted-foreground">
+                  Valid for 48 hours • Keep this token safe
                 </p>
               </div>
             </div>

@@ -3,7 +3,20 @@ import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLanguage } from '@/contexts/LanguageContext'
-import { Shield, MessageCircle, BookOpen, Users, Lock, Heart } from 'lucide-react'
+import { 
+  MessageSquare, 
+  FileText, 
+  Shield, 
+  Users, 
+  Clock, 
+  Heart,
+  ArrowRight,
+  KeyRound,
+  AlertTriangle,
+  BookOpen,
+  CheckCircle,
+  Lock
+} from 'lucide-react'
 
 export const Home: React.FC = () => {
   const { t } = useLanguage()
@@ -11,43 +24,70 @@ export const Home: React.FC = () => {
   return (
     <div className="min-h-screen">
       {/* Hero Section */}
-      <section className="bg-gradient-hero py-20 px-4">
-        <div className="container mx-auto text-center text-white">
-          <div className="max-w-4xl mx-auto">
-            <h1 className="text-5xl md:text-6xl font-bold mb-6 leading-tight">
-              {t('home.title')}
-            </h1>
-            <p className="text-xl md:text-2xl mb-4 opacity-90">
-              {t('home.subtitle')}
-            </p>
-            <p className="text-lg mb-8 opacity-80 max-w-2xl mx-auto">
-              {t('home.description')}
-            </p>
-            
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button
-                size="lg"
-                variant="secondary"
-                asChild
-                className="bg-white/10 backdrop-blur-sm border-white/20 text-white hover:bg-white/20 shadow-strong"
-              >
-                <Link to="/report" className="flex items-center space-x-2">
-                  <Shield className="h-5 w-5" />
-                  <span>{t('home.report_button')}</span>
-                </Link>
+      <section className="hero-gradient px-6 py-20 text-center">
+        <div className="max-w-4xl mx-auto">
+          <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm px-4 py-2 rounded-full text-sm font-medium mb-6 border border-white/20">
+            <Shield className="h-4 w-4 text-primary" />
+            100% Anonymous & Secure
+          </div>
+          
+          <h1 className="text-4xl md:text-6xl font-bold mb-6 text-gradient">
+            {t('home.title')}
+          </h1>
+          <p className="text-xl md:text-2xl text-muted-foreground mb-4 max-w-3xl mx-auto">
+            {t('home.subtitle')}
+          </p>
+          <p className="text-lg text-muted-foreground mb-10 max-w-2xl mx-auto">
+            {t('home.description')}
+          </p>
+
+          {/* Main CTA Buttons */}
+          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-16">
+            <Link to="/report">
+              <Button size="lg" className="btn-primary w-full sm:w-auto h-14 px-8 text-lg">
+                <FileText className="h-5 w-5 mr-2" />
+                {t('home.report_button')}
+                <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
-              
-              <Button
-                size="lg"
-                variant="outline"
-                asChild
-                className="bg-white/5 backdrop-blur-sm border-white/30 text-white hover:bg-white/10"
-              >
-                <Link to="/chat" className="flex items-center space-x-2">
-                  <MessageCircle className="h-5 w-5" />
-                  <span>{t('home.chat_button')}</span>
-                </Link>
+            </Link>
+            <Link to="/token">
+              <Button variant="outline" size="lg" className="w-full sm:w-auto h-14 px-8 text-lg border-2 hover:bg-primary/5">
+                <KeyRound className="h-5 w-5 mr-2" />
+                Get Token & Chat
+                <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
+            </Link>
+          </div>
+
+          {/* Trust Indicators */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-3xl mx-auto">
+            <div className="text-center">
+              <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-2">
+                <Shield className="h-6 w-6 text-primary" />
+              </div>
+              <div className="text-2xl font-bold text-primary">100%</div>
+              <div className="text-sm text-muted-foreground">Anonymous</div>
+            </div>
+            <div className="text-center">
+              <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-2">
+                <Clock className="h-6 w-6 text-primary" />
+              </div>
+              <div className="text-2xl font-bold text-primary">24/7</div>
+              <div className="text-sm text-muted-foreground">Available</div>
+            </div>
+            <div className="text-center">
+              <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-2">
+                <CheckCircle className="h-6 w-6 text-primary" />
+              </div>
+              <div className="text-2xl font-bold text-primary">Safe</div>
+              <div className="text-sm text-muted-foreground">& Secure</div>
+            </div>
+            <div className="text-center">
+              <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-2">
+                <Heart className="h-6 w-6 text-primary" />
+              </div>
+              <div className="text-2xl font-bold text-primary">Free</div>
+              <div className="text-sm text-muted-foreground">Service</div>
             </div>
           </div>
         </div>
@@ -154,7 +194,7 @@ export const Home: React.FC = () => {
             <Card className="shadow-medium hover:shadow-strong transition-all duration-300 border-0 bg-gradient-card">
               <CardHeader>
                 <CardTitle className="flex items-center space-x-2">
-                  <MessageCircle className="h-6 w-6 text-primary" />
+                  <MessageSquare className="h-6 w-6 text-primary" />
                   <span>Continue Conversation</span>
                 </CardTitle>
                 <CardDescription>
