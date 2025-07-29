@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -7,6 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { useToast } from '@/hooks/use-toast'
 import { SimpleBarChart, SimplePieChart, SimpleLineChart } from '@/components/ui/simple-chart'
+import { supabase } from '@/integrations/supabase/client'
+import { AdminSignup } from '@/components/AdminSignup'
 import { 
   Shield, 
   MessageCircle, 
@@ -16,11 +18,11 @@ import {
   AlertTriangle,
   BarChart3,
   Calendar,
-  Filter
+  Filter,
+  UserPlus,
+  Eye,
+  EyeOff
 } from 'lucide-react'
-
-// Mock admin authentication (replace with real auth)
-const ADMIN_PASSWORD = 'safetalk2024'
 
 // Mock analytics data
 const mockReportsData = [
@@ -69,36 +71,134 @@ export const Admin: React.FC = () => {
   const { t } = useLanguage()
   const { toast } = useToast()
   const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [showSignup, setShowSignup] = useState(false)
+  const [realTimeData, setRealTimeData] = useState({
+    totalReports: 0,
+    activeChats: 0,
+    recentReports: [],
+    activeSessions: []
+  })
+
+  // Real-time data subscription
+  useEffect(() => {
+    loadRealTimeData()
+
+    const reportsChannel = supabase
+      .channel('reports-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' }, loadRealTimeData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_sessions' }, loadRealTimeData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, loadRealTimeData)
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(reportsChannel)
+    }
+  }, [])
+
+  const loadRealTimeData = async () => {
+    try {
+      // Get total reports
+      const { count: totalReports } = await supabase
+        .from('reports')
+        .select('*', { count: 'exact', head: true })
+
+      // Get active chat sessions
+      const { data: activeSessions } = await supabase
+        .from('chat_sessions')
+        .select('*')
+        .eq('status', 'active')
+        .gt('expires_at', new Date().toISOString())
+
+      // Get recent reports
+      const { data: recentReports } = await supabase
+        .from('reports')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(10)
+
+      setRealTimeData({
+        totalReports: totalReports || 0,
+        activeChats: activeSessions?.length || 0,
+        recentReports: recentReports || [],
+        activeSessions: activeSessions || []
+      })
+    } catch (error) {
+      console.error('Error loading real-time data:', error)
+    }
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
     
-    // Mock authentication delay
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
-    if (password === ADMIN_PASSWORD) {
-      setIsAuthenticated(true)
-      toast({
-        title: "Login successful",
-        description: "Welcome to the admin dashboard",
-        variant: "default"
-      })
-    } else {
+    try {
+      // Query admin users table
+      const { data: admin, error } = await supabase
+        .from('admin_users')
+        .select('*')
+        .eq('email', email)
+        .single()
+
+      if (error || !admin) {
+        toast({
+          title: "Login failed",
+          description: "Invalid email or password. Please try again.",
+          variant: "destructive"
+        })
+        return
+      }
+
+      // Basic password check (in production, use proper password hashing)
+      const providedPasswordHash = btoa(password)
+      if (admin.password_hash === providedPasswordHash) {
+        setIsAuthenticated(true)
+        toast({
+          title: "Login successful",
+          description: `Welcome back, ${admin.full_name}!`,
+          variant: "default"
+        })
+      } else {
+        toast({
+          title: "Login failed",
+          description: "Invalid email or password. Please try again.",
+          variant: "destructive"
+        })
+      }
+    } catch (error) {
+      console.error('Login error:', error)
       toast({
         title: "Login failed",
-        description: "Invalid password. Please try again.",
+        description: "An error occurred. Please try again.",
         variant: "destructive"
       })
+    } finally {
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }
 
   const handleLogout = () => {
     setIsAuthenticated(false)
     setPassword('')
+    setEmail('')
+  }
+
+  // Show signup component
+  if (showSignup) {
+    return (
+      <AdminSignup 
+        onBack={() => setShowSignup(false)}
+        onSignupSuccess={() => {
+          setShowSignup(false)
+          toast({
+            title: "Account Created",
+            description: "Please login with your new credentials",
+          })
+        }}
+      />
+    )
   }
 
   // Login Form
@@ -117,6 +217,18 @@ export const Admin: React.FC = () => {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="admin@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="h-12"
+                  required
+                />
+              </div>
               <div>
                 <Label htmlFor="password">Password</Label>
                 <Input
@@ -137,10 +249,16 @@ export const Admin: React.FC = () => {
                 {isLoading ? 'Authenticating...' : 'Login to Dashboard'}
               </Button>
             </form>
-            <div className="mt-4 p-3 bg-muted/50 rounded-lg">
-              <p className="text-xs text-muted-foreground">
-                <strong>Demo password:</strong> safetalk2024
-              </p>
+            
+            <div className="mt-4 text-center">
+              <Button
+                variant="link"
+                onClick={() => setShowSignup(true)}
+                className="text-sm"
+              >
+                <UserPlus className="h-4 w-4 mr-2" />
+                Create Admin Account
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -185,8 +303,8 @@ export const Admin: React.FC = () => {
                   <Shield className="h-4 w-4 text-primary" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-foreground">158</div>
-                  <p className="text-xs text-muted-foreground">+12% from last month</p>
+                  <div className="text-2xl font-bold text-foreground">{realTimeData.totalReports}</div>
+                  <p className="text-xs text-muted-foreground">Real-time count</p>
                 </CardContent>
               </Card>
 
@@ -196,7 +314,7 @@ export const Admin: React.FC = () => {
                   <MessageCircle className="h-4 w-4 text-accent" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-foreground">23</div>
+                  <div className="text-2xl font-bold text-foreground">{realTimeData.activeChats}</div>
                   <p className="text-xs text-muted-foreground">Currently ongoing</p>
                 </CardContent>
               </Card>

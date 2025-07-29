@@ -9,17 +9,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { useToast } from '@/hooks/use-toast'
+import { supabase } from '@/integrations/supabase/client'
 import { Shield, AlertTriangle, Heart, Users, Home, HelpCircle } from 'lucide-react'
-
-// Mock function - replace with actual Supabase call
-const mockCreateReport = async (data: any) => {
-  // Simulate API call
-  await new Promise(resolve => setTimeout(resolve, 1000))
-  return {
-    token: 'ST' + Math.random().toString(36).substr(2, 6).toUpperCase(),
-    id: Math.random().toString()
-  }
-}
 
 export const Report: React.FC = () => {
   const { t } = useLanguage()
@@ -58,10 +49,35 @@ export const Report: React.FC = () => {
     setIsSubmitting(true)
     
     try {
-      const result = await mockCreateReport(formData)
+      // Generate token
+      const token = 'ST' + Math.random().toString(36).substr(2, 6).toUpperCase()
+      
+      // Create report in database
+      const { data: report, error: reportError } = await supabase
+        .from('reports')
+        .insert([{
+          token,
+          type: formData.issue_type,
+          description: formData.description,
+          wants_followup: formData.allow_followup
+        }])
+        .select()
+        .single()
+
+      if (reportError) throw reportError
+
+      // Create chat session
+      const { error: sessionError } = await supabase
+        .from('chat_sessions')
+        .insert([{
+          token,
+          report_id: report.id
+        }])
+
+      if (sessionError) throw sessionError
       
       // Store token in sessionStorage for the token page
-      sessionStorage.setItem('reportToken', result.token)
+      sessionStorage.setItem('reportToken', token)
       
       toast({
         title: "Report submitted successfully",

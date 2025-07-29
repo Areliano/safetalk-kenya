@@ -4,26 +4,20 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { useToast } from '@/hooks/use-toast'
-import { Send, MessageCircle, Shield, User, UserCheck } from 'lucide-react'
+import { Send, MessageCircle, Shield, User, UserCheck, Bot, Clock } from 'lucide-react'
+import { supabase } from '@/integrations/supabase/client'
+import { ChatBot } from '@/utils/chatbot'
 
 interface Message {
   id: string
-  sender: 'student' | 'counselor'
+  sender: 'student' | 'counselor' | 'bot'
   content: string
   timestamp: string
+  suggested_actions?: string[]
 }
-
-// Mock messages for demo
-const mockMessages: Message[] = [
-  {
-    id: '1',
-    sender: 'counselor',
-    content: 'Hello, I received your report and I\'m here to help. Thank you for reaching out - that took courage. How are you feeling right now?',
-    timestamp: new Date(Date.now() - 300000).toISOString()
-  }
-]
 
 export const Chat: React.FC = () => {
   const { t } = useLanguage()
@@ -37,6 +31,40 @@ export const Chat: React.FC = () => {
   const [newMessage, setNewMessage] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [chatBot] = useState(() => new ChatBot())
+  const [sessionExpiry, setSessionExpiry] = useState<Date | null>(null)
+
+  // Real-time subscription for messages
+  useEffect(() => {
+    if (!sessionId) return
+
+    const channel = supabase
+      .channel('chat-messages')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `session_id=eq.${sessionId}`
+        },
+        (payload) => {
+          const newMessage = payload.new as any
+          setMessages(prev => [...prev, {
+            id: newMessage.id,
+            sender: newMessage.sender,
+            content: newMessage.content,
+            timestamp: newMessage.timestamp
+          }])
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [sessionId])
 
   useEffect(() => {
     const tokenFromUrl = searchParams.get('token')
@@ -60,11 +88,67 @@ export const Chat: React.FC = () => {
   const loadChat = async (tokenValue: string) => {
     setIsLoading(true)
     try {
-      // Mock loading messages
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      setMessages(mockMessages)
+      // Check if chat session exists
+      const { data: session } = await supabase
+        .from('chat_sessions')
+        .select('*')
+        .eq('token', tokenValue)
+        .single()
+
+      if (session) {
+        // Check if session is expired
+        if (new Date(session.expires_at) < new Date()) {
+          toast({
+            title: "Session Expired",
+            description: "This chat session has expired. Please generate a new token.",
+            variant: "destructive"
+          })
+          return
+        }
+
+        setSessionId(session.id)
+        setSessionExpiry(new Date(session.expires_at))
+
+        // Load existing messages
+        const { data: existingMessages } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('session_id', session.id)
+          .order('timestamp', { ascending: true })
+
+        if (existingMessages) {
+          const formattedMessages: Message[] = existingMessages.map(msg => ({
+            id: msg.id,
+            sender: msg.sender as 'student' | 'counselor' | 'bot',
+            content: msg.content,
+            timestamp: msg.timestamp,
+            suggested_actions: msg.message_type === 'bot_suggestion' ? JSON.parse(msg.content || '[]') : undefined
+          }))
+          setMessages(formattedMessages)
+        }
+      } else {
+        // Create new session
+        const { data: newSession, error } = await supabase
+          .from('chat_sessions')
+          .insert([{ token: tokenValue }])
+          .select()
+          .single()
+
+        if (error) {
+          throw error
+        }
+
+        setSessionId(newSession.id)
+        setSessionExpiry(new Date(newSession.expires_at))
+
+        // Send initial bot message
+        const initialResponse = chatBot.getInitialMessage()
+        await addBotMessage(newSession.id, initialResponse)
+      }
+
       setIsConnected(true)
     } catch (error) {
+      console.error('Error loading chat:', error)
       toast({
         title: "Connection failed",
         description: "Could not load chat. Please try again.",
@@ -75,6 +159,29 @@ export const Chat: React.FC = () => {
     }
   }
 
+  const addBotMessage = async (sessionId: string, response: { message: string; suggestedActions?: string[] }) => {
+    const botMessage: Message = {
+      id: crypto.randomUUID(),
+      sender: 'bot',
+      content: response.message,
+      timestamp: new Date().toISOString(),
+      suggested_actions: response.suggestedActions
+    }
+
+    // Add to local state immediately for responsiveness
+    setMessages(prev => [...prev, botMessage])
+
+    // Save to database
+    await supabase
+      .from('messages')
+      .insert([{
+        session_id: sessionId,
+        sender: 'bot',
+        content: response.message,
+        message_type: response.suggestedActions ? 'bot_suggestion' : 'text'
+      }])
+  }
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
@@ -82,28 +189,64 @@ export const Chat: React.FC = () => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    if (!newMessage.trim() || !token) return
+    if (!newMessage.trim() || !token || !sessionId) return
 
     const message: Message = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       sender: 'student',
       content: newMessage.trim(),
       timestamp: new Date().toISOString()
     }
 
+    // Add to local state immediately
     setMessages(prev => [...prev, message])
+    
+    // Save to database
+    await supabase
+      .from('messages')
+      .insert([{
+        session_id: sessionId,
+        sender: 'student',
+        content: newMessage.trim(),
+        message_type: 'text'
+      }])
+
+    const userInput = newMessage.trim()
     setNewMessage('')
 
-    // Mock counselor response
-    setTimeout(() => {
-      const counselorResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        sender: 'counselor',
-        content: 'Thank you for sharing that with me. I understand this must be difficult. Can you tell me more about what support you might need right now?',
-        timestamp: new Date().toISOString()
-      }
-      setMessages(prev => [...prev, counselorResponse])
-    }, 2000)
+    // Get bot response
+    setTimeout(async () => {
+      const botResponse = chatBot.getResponse(userInput)
+      await addBotMessage(sessionId, botResponse)
+    }, 1000)
+  }
+
+  const handleSuggestedAction = async (action: string) => {
+    if (!sessionId) return
+
+    const message: Message = {
+      id: crypto.randomUUID(),
+      sender: 'student',
+      content: action,
+      timestamp: new Date().toISOString()
+    }
+
+    setMessages(prev => [...prev, message])
+    
+    await supabase
+      .from('messages')
+      .insert([{
+        session_id: sessionId,
+        sender: 'student',
+        content: action,
+        message_type: 'text'
+      }])
+
+    // Get bot response
+    setTimeout(async () => {
+      const botResponse = chatBot.getResponse(action)
+      await addBotMessage(sessionId, botResponse)
+    }, 1000)
   }
 
   const handleTokenSubmit = (e: React.FormEvent) => {
@@ -208,12 +351,16 @@ export const Chat: React.FC = () => {
                 <div className={`p-2 rounded-full ${
                   message.sender === 'student' 
                     ? 'bg-primary' 
-                    : 'bg-accent'
+                    : message.sender === 'bot'
+                    ? 'bg-accent'
+                    : 'bg-safe'
                 }`}>
                   {message.sender === 'student' ? (
                     <User className="h-4 w-4 text-primary-foreground" />
+                  ) : message.sender === 'bot' ? (
+                    <Bot className="h-4 w-4 text-accent-foreground" />
                   ) : (
-                    <UserCheck className="h-4 w-4 text-accent-foreground" />
+                    <UserCheck className="h-4 w-4 text-safe-foreground" />
                   )}
                 </div>
 
@@ -223,13 +370,47 @@ export const Chat: React.FC = () => {
                     ? 'bg-primary text-primary-foreground'
                     : 'bg-background border border-border'
                 }`}>
-                  <p className="text-sm">{message.content}</p>
+                  <div className="flex items-start space-x-2">
+                    {message.sender === 'bot' && (
+                      <Badge variant="secondary" className="text-xs">
+                        AI Counselor
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  
+                  {/* Suggested Actions */}
+                  {message.suggested_actions && message.suggested_actions.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-xs text-muted-foreground">Quick responses:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {message.suggested_actions.map((action, index) => (
+                          <Button
+                            key={index}
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleSuggestedAction(action)}
+                            className="text-xs h-8"
+                          >
+                            {action}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
                   <p className={`text-xs mt-1 ${
                     message.sender === 'student' 
                       ? 'text-primary-foreground/70' 
                       : 'text-muted-foreground'
                   }`}>
                     {formatTime(message.timestamp)}
+                    {sessionExpiry && message.sender === 'bot' && (
+                      <span className="ml-2 flex items-center">
+                        <Clock className="h-3 w-3 mr-1" />
+                        Expires: {sessionExpiry.toLocaleDateString()}
+                      </span>
+                    )}
                   </p>
                 </div>
               </div>

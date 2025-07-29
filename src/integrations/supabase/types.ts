@@ -14,7 +14,142 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      admin_users: {
+        Row: {
+          created_at: string
+          email: string
+          full_name: string
+          id: string
+          password_hash: string
+          role: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          full_name: string
+          id?: string
+          password_hash: string
+          role?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          full_name?: string
+          id?: string
+          password_hash?: string
+          role?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      chat_sessions: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+          report_id: string | null
+          status: string
+          token: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          report_id?: string | null
+          status?: string
+          token: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          report_id?: string | null
+          status?: string
+          token?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_sessions_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: false
+            referencedRelation: "reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      messages: {
+        Row: {
+          content: string
+          id: string
+          message_type: string
+          sender: string
+          session_id: string
+          timestamp: string
+        }
+        Insert: {
+          content: string
+          id?: string
+          message_type?: string
+          sender: string
+          session_id: string
+          timestamp?: string
+        }
+        Update: {
+          content?: string
+          id?: string
+          message_type?: string
+          sender?: string
+          session_id?: string
+          timestamp?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "messages_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "chat_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      reports: {
+        Row: {
+          description: string
+          id: string
+          priority: string
+          status: string
+          timestamp: string
+          token: string
+          type: string
+          wants_followup: boolean
+        }
+        Insert: {
+          description: string
+          id?: string
+          priority?: string
+          status?: string
+          timestamp?: string
+          token: string
+          type: string
+          wants_followup?: boolean
+        }
+        Update: {
+          description?: string
+          id?: string
+          priority?: string
+          status?: string
+          timestamp?: string
+          token?: string
+          type?: string
+          wants_followup?: boolean
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
