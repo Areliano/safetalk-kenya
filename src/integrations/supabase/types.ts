@@ -46,6 +46,7 @@ export type Database = {
       }
       chat_sessions: {
         Row: {
+          case_id: string | null
           created_at: string
           expires_at: string
           id: string
@@ -55,6 +56,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          case_id?: string | null
           created_at?: string
           expires_at?: string
           id?: string
@@ -64,6 +66,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          case_id?: string | null
           created_at?: string
           expires_at?: string
           id?: string
@@ -119,6 +122,7 @@ export type Database = {
       }
       reports: {
         Row: {
+          case_id: string | null
           description: string
           id: string
           priority: string
@@ -129,6 +133,7 @@ export type Database = {
           wants_followup: boolean
         }
         Insert: {
+          case_id?: string | null
           description: string
           id?: string
           priority?: string
@@ -139,6 +144,7 @@ export type Database = {
           wants_followup?: boolean
         }
         Update: {
+          case_id?: string | null
           description?: string
           id?: string
           priority?: string
@@ -155,7 +161,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      generate_case_id: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
     }
     Enums: {
       [_ in never]: never
