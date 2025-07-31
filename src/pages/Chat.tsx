@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
-import { useLanguage } from '@/contexts/LanguageContext'
-import { useToast } from '@/hooks/use-toast'
-import { Send, MessageCircle, Shield, User, UserCheck, Bot, Clock } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { supabase } from '@/integrations/supabase/client'
+import { useToast } from '@/hooks/use-toast'
+import { Send, Bot, User, MessageCircle } from 'lucide-react'
 import { ChatBot } from '@/utils/chatbot'
+import { CaseIdInput } from '@/components/CaseIdInput'
 
 interface Message {
   id: string
@@ -20,27 +21,42 @@ interface Message {
 }
 
 export const Chat: React.FC = () => {
-  const { t } = useLanguage()
-  const { toast } = useToast()
-  const navigate = useNavigate()
+  const [messages, setMessages] = useState<Message[]>([])
+  const [inputValue, setInputValue] = useState('')
+  const [isConnected, setIsConnected] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [token, setToken] = useState('')
+  const [caseId, setCaseId] = useState<string | null>(null)
+  const [showCaseInput, setShowCaseInput] = useState(false)
   const [searchParams] = useSearchParams()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   
-  const [token, setToken] = useState('')
-  const [messages, setMessages] = useState<Message[]>([])
-  const [newMessage, setNewMessage] = useState('')
-  const [isConnected, setIsConnected] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [chatBot] = useState(() => new ChatBot())
-  const [sessionExpiry, setSessionExpiry] = useState<Date | null>(null)
+  const { toast } = useToast()
+  const chatBot = new ChatBot()
 
-  // Real-time subscription for messages
+  useEffect(() => {
+    const tokenFromUrl = searchParams.get('token')
+    const caseIdFromUrl = searchParams.get('caseId')
+    const storedSessionId = sessionStorage.getItem('chatSessionId')
+    
+    if (tokenFromUrl) {
+      loadChat(tokenFromUrl)
+    } else if (caseIdFromUrl) {
+      handleCaseIdAccess({ reportId: '', chatSessionId: '', caseId: caseIdFromUrl })
+    } else if (storedSessionId) {
+      setSessionId(storedSessionId)
+      setIsConnected(true)
+      loadExistingChat(storedSessionId)
+    }
+  }, [searchParams])
+
+  // Real-time subscription for new messages
   useEffect(() => {
     if (!sessionId) return
 
     const channel = supabase
-      .channel('chat-messages')
+      .channel('messages-changes')
       .on(
         'postgres_changes',
         {
@@ -50,13 +66,16 @@ export const Chat: React.FC = () => {
           filter: `session_id=eq.${sessionId}`
         },
         (payload) => {
+          // Only add messages not sent by current user to avoid duplicates
           const newMessage = payload.new as any
-          setMessages(prev => [...prev, {
-            id: newMessage.id,
-            sender: newMessage.sender,
-            content: newMessage.content,
-            timestamp: newMessage.timestamp
-          }])
+          if (newMessage.sender !== 'student') {
+            setMessages(prev => [...prev, {
+              id: newMessage.id,
+              sender: newMessage.sender,
+              content: newMessage.content,
+              timestamp: newMessage.timestamp
+            }])
+          }
         }
       )
       .subscribe()
@@ -67,95 +86,138 @@ export const Chat: React.FC = () => {
   }, [sessionId])
 
   useEffect(() => {
-    const tokenFromUrl = searchParams.get('token')
-    const tokenFromSession = sessionStorage.getItem('reportToken')
-    
-    if (tokenFromUrl) {
-      setToken(tokenFromUrl)
-      loadChat(tokenFromUrl)
-    } else if (tokenFromSession) {
-      setToken(tokenFromSession)
-      loadChat(tokenFromSession)
-    } else {
-      setIsLoading(false)
-    }
-  }, [searchParams])
-
-  useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  const handleCaseIdAccess = async (caseData: { reportId: string; chatSessionId?: string; caseId: string }) => {
+    setIsLoading(true)
+    setCaseId(caseData.caseId)
+    
+    try {
+      let currentSessionId: string
+
+      if (caseData.chatSessionId) {
+        // Existing chat session found
+        currentSessionId = caseData.chatSessionId
+      } else {
+        // Create new chat session linked to the case
+        const { data: newSession, error: createError } = await supabase
+          .from('chat_sessions')
+          .insert({
+            token: `CASE-${caseData.caseId}`,
+            case_id: caseData.caseId,
+            status: 'active'
+          })
+          .select()
+          .single()
+
+        if (createError) throw createError
+        currentSessionId = newSession.id
+      }
+
+      setSessionId(currentSessionId)
+      setIsConnected(true)
+      
+      // Store session for persistence
+      sessionStorage.setItem('chatSessionId', currentSessionId)
+      
+      // Load existing messages
+      await loadExistingChat(currentSessionId)
+      
+      // Add initial bot message if no messages exist
+      if (messages.length === 0) {
+        await addBotMessage(currentSessionId, chatBot.getInitialMessage())
+      }
+    } catch (error) {
+      console.error('Error accessing case:', error)
+      toast({
+        title: "Error",
+        description: "Failed to access case chat session",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   const loadChat = async (tokenValue: string) => {
     setIsLoading(true)
     try {
-      // Check if chat session exists
-      const { data: session } = await supabase
+      // Check if chat session already exists for this token
+      const { data: existingSession, error: sessionError } = await supabase
         .from('chat_sessions')
         .select('*')
         .eq('token', tokenValue)
-        .single()
+        .maybeSingle()
 
-      if (session) {
-        // Check if session is expired
-        if (new Date(session.expires_at) < new Date()) {
-          toast({
-            title: "Session Expired",
-            description: "This chat session has expired. Please generate a new token.",
-            variant: "destructive"
-          })
-          return
-        }
+      if (sessionError && sessionError.code !== 'PGRST116') {
+        throw sessionError
+      }
 
-        setSessionId(session.id)
-        setSessionExpiry(new Date(session.expires_at))
+      let currentSessionId: string
 
-        // Load existing messages
-        const { data: existingMessages } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('session_id', session.id)
-          .order('timestamp', { ascending: true })
-
-        if (existingMessages) {
-          const formattedMessages: Message[] = existingMessages.map(msg => ({
-            id: msg.id,
-            sender: msg.sender as 'student' | 'counselor' | 'bot',
-            content: msg.content,
-            timestamp: msg.timestamp,
-            suggested_actions: msg.message_type === 'bot_suggestion' ? JSON.parse(msg.content || '[]') : undefined
-          }))
-          setMessages(formattedMessages)
-        }
+      if (existingSession) {
+        currentSessionId = existingSession.id
       } else {
-        // Create new session
-        const { data: newSession, error } = await supabase
+        // Create new chat session
+        const { data: newSession, error: createError } = await supabase
           .from('chat_sessions')
-          .insert([{ token: tokenValue }])
+          .insert({
+            token: tokenValue,
+            status: 'active'
+          })
           .select()
           .single()
 
-        if (error) {
-          throw error
-        }
-
-        setSessionId(newSession.id)
-        setSessionExpiry(new Date(newSession.expires_at))
-
-        // Send initial bot message
-        const initialResponse = chatBot.getInitialMessage()
-        await addBotMessage(newSession.id, initialResponse)
+        if (createError) throw createError
+        currentSessionId = newSession.id
       }
 
+      setSessionId(currentSessionId)
+      setToken(tokenValue)
       setIsConnected(true)
+      
+      // Store session for persistence
+      sessionStorage.setItem('chatSessionId', currentSessionId)
+      
+      // Load existing messages
+      await loadExistingChat(currentSessionId)
+      
+      // Add initial bot message if no messages exist
+      if (messages.length === 0) {
+        await addBotMessage(currentSessionId, chatBot.getInitialMessage())
+      }
     } catch (error) {
       console.error('Error loading chat:', error)
       toast({
-        title: "Connection failed",
-        description: "Could not load chat. Please try again.",
-        variant: "destructive"
+        title: "Error",
+        description: "Failed to load chat session",
+        variant: "destructive",
       })
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const loadExistingChat = async (sessionId: string) => {
+    try {
+      const { data: existingMessages } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('session_id', sessionId)
+        .order('timestamp', { ascending: true })
+
+      if (existingMessages) {
+        const formattedMessages: Message[] = existingMessages.map(msg => ({
+          id: msg.id,
+          sender: msg.sender as 'student' | 'counselor' | 'bot',
+          content: msg.content,
+          timestamp: msg.timestamp
+        }))
+        setMessages(formattedMessages)
+      }
+    } catch (error) {
+      console.error('Error loading messages:', error)
     }
   }
 
@@ -172,14 +234,18 @@ export const Chat: React.FC = () => {
     setMessages(prev => [...prev, botMessage])
 
     // Save to database
-    await supabase
-      .from('messages')
-      .insert([{
-        session_id: sessionId,
-        sender: 'bot',
-        content: response.message,
-        message_type: response.suggestedActions ? 'bot_suggestion' : 'text'
-      }])
+    try {
+      await supabase
+        .from('messages')
+        .insert({
+          session_id: sessionId,
+          sender: 'bot',
+          content: response.message,
+          message_type: 'text'
+        })
+    } catch (error) {
+      console.error('Error saving bot message:', error)
+    }
   }
 
   const scrollToBottom = () => {
@@ -189,12 +255,12 @@ export const Chat: React.FC = () => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    if (!newMessage.trim() || !token || !sessionId) return
+    if (!inputValue.trim() || !sessionId) return
 
     const message: Message = {
       id: crypto.randomUUID(),
       sender: 'student',
-      content: newMessage.trim(),
+      content: inputValue.trim(),
       timestamp: new Date().toISOString()
     }
 
@@ -202,17 +268,21 @@ export const Chat: React.FC = () => {
     setMessages(prev => [...prev, message])
     
     // Save to database
-    await supabase
-      .from('messages')
-      .insert([{
-        session_id: sessionId,
-        sender: 'student',
-        content: newMessage.trim(),
-        message_type: 'text'
-      }])
+    try {
+      await supabase
+        .from('messages')
+        .insert({
+          session_id: sessionId,
+          sender: 'student',
+          content: inputValue.trim(),
+          message_type: 'text'
+        })
+    } catch (error) {
+      console.error('Error saving message:', error)
+    }
 
-    const userInput = newMessage.trim()
-    setNewMessage('')
+    const userInput = inputValue.trim()
+    setInputValue('')
 
     // Get bot response
     setTimeout(async () => {
@@ -233,14 +303,18 @@ export const Chat: React.FC = () => {
 
     setMessages(prev => [...prev, message])
     
-    await supabase
-      .from('messages')
-      .insert([{
-        session_id: sessionId,
-        sender: 'student',
-        content: action,
-        message_type: 'text'
-      }])
+    try {
+      await supabase
+        .from('messages')
+        .insert({
+          session_id: sessionId,
+          sender: 'student',
+          content: action,
+          message_type: 'text'
+        })
+    } catch (error) {
+      console.error('Error saving message:', error)
+    }
 
     // Get bot response
     setTimeout(async () => {
@@ -252,7 +326,6 @@ export const Chat: React.FC = () => {
   const handleTokenSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (token.trim()) {
-      navigate(`/chat?token=${token.trim()}`)
       loadChat(token.trim())
     }
   }
@@ -263,193 +336,155 @@ export const Chat: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-muted/30">
-        <Card className="shadow-medium">
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <MessageCircle className="h-8 w-8 text-primary mx-auto mb-4 animate-pulse" />
-              <p>{t('chat.connecting')}</p>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="container mx-auto px-4 py-8 flex justify-center items-center min-h-96">
+        <div className="text-center">
+          <MessageCircle className="h-8 w-8 animate-spin mx-auto mb-4" />
+          <p>Loading chat...</p>
+        </div>
       </div>
     )
   }
 
-  if (!token || !isConnected) {
+  if (!isConnected && !isLoading) {
     return (
-      <div className="min-h-screen py-12 px-4 bg-muted/30">
-        <div className="container mx-auto max-w-md">
-          <Card className="shadow-strong bg-gradient-card border-0">
-            <CardHeader className="text-center">
-              <div className="bg-gradient-primary p-3 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-                <MessageCircle className="h-8 w-8 text-primary-foreground" />
-              </div>
-              <CardTitle>{t('chat.title')}</CardTitle>
-              <CardDescription>
-                Enter your anonymous token to continue your conversation
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleTokenSubmit} className="space-y-4">
-                <div>
-                  <Label htmlFor="token">Anonymous Token</Label>
-                  <Input
-                    id="token"
-                    placeholder="Enter your token (e.g., ST1A2B3C)"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value.toUpperCase())}
-                    className="h-12 font-mono text-center text-lg tracking-widest"
-                  />
+      <div className="container mx-auto px-4 py-8 space-y-6">
+        <div className="text-center">
+          <h1 className="text-3xl font-bold mb-4">Access Your Chat</h1>
+          <p className="text-muted-foreground mb-8">
+            Enter your case ID or chat token to continue your conversation
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+          {/* Case ID Input */}
+          <div>
+            <h2 className="text-xl font-semibold mb-4 text-center">Have a Case ID?</h2>
+            <CaseIdInput onCaseFound={handleCaseIdAccess} />
+          </div>
+
+          {/* Token Input */}
+          <div>
+            <h2 className="text-xl font-semibold mb-4 text-center">Have a Chat Token?</h2>
+            <Card className="w-full">
+              <CardHeader className="text-center">
+                <div className="mx-auto mb-4 p-3 bg-gradient-primary rounded-full w-fit">
+                  <MessageCircle className="h-6 w-6 text-primary-foreground" />
                 </div>
-                <Button type="submit" className="w-full h-12">
-                  Start Chat
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
+                <CardTitle>Connect with Token</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleTokenSubmit} className="space-y-4">
+                  <Input
+                    type="text"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    placeholder="Enter your chat token"
+                    required
+                  />
+                  <Button type="submit" className="w-full">
+                    Connect to Chat
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-muted/30">
-      {/* Chat Header */}
-      <div className="bg-gradient-card border-b border-border shadow-soft">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="bg-gradient-primary p-2 rounded-full">
-                <Shield className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <div>
-                <h1 className="font-semibold">{t('chat.title')}</h1>
-                <p className="text-sm text-muted-foreground">Token: {token}</p>
-              </div>
+    <div className="container mx-auto px-4 py-8">
+      <Card className="max-w-4xl mx-auto h-[600px] flex flex-col">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <MessageCircle className="h-5 w-5" />
+              Anonymous Chat
             </div>
-            <div className="flex items-center space-x-2 text-sm text-muted-foreground">
-              <div className="w-2 h-2 bg-safe rounded-full"></div>
-              <span>Connected</span>
+            <div className="flex gap-2">
+              {caseId && (
+                <Badge variant="default">Case #{caseId}</Badge>
+              )}
+              {token && (
+                <Badge variant="outline">Token: {token}</Badge>
+              )}
             </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Messages Area */}
-      <div className="flex-1 container mx-auto px-4 py-6 max-w-4xl">
-        <div className="space-y-4 mb-6">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.sender === 'student' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div className={`flex items-start space-x-3 max-w-xs md:max-w-md lg:max-w-lg ${
-                message.sender === 'student' ? 'flex-row-reverse space-x-reverse' : ''
-              }`}>
-                {/* Avatar */}
-                <div className={`p-2 rounded-full ${
-                  message.sender === 'student' 
-                    ? 'bg-primary' 
-                    : message.sender === 'bot'
-                    ? 'bg-accent'
-                    : 'bg-safe'
+          </CardTitle>
+        </CardHeader>
+        
+        <CardContent className="flex-1 flex flex-col">
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto space-y-4 mb-4">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex ${message.sender === 'student' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div className={`flex items-start space-x-3 max-w-xs md:max-w-md ${
+                  message.sender === 'student' ? 'flex-row-reverse space-x-reverse' : ''
                 }`}>
-                  {message.sender === 'student' ? (
-                    <User className="h-4 w-4 text-primary-foreground" />
-                  ) : message.sender === 'bot' ? (
-                    <Bot className="h-4 w-4 text-accent-foreground" />
-                  ) : (
-                    <UserCheck className="h-4 w-4 text-safe-foreground" />
-                  )}
-                </div>
-
-                {/* Message Bubble */}
-                <div className={`p-3 rounded-lg shadow-medium ${
-                  message.sender === 'student'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-background border border-border'
-                }`}>
-                  <div className="flex items-start space-x-2">
-                    {message.sender === 'bot' && (
-                      <Badge variant="secondary" className="text-xs">
-                        AI Counselor
-                      </Badge>
-                    )}
-                  </div>
-                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  <Avatar className="h-8 w-8">
+                    <AvatarFallback>
+                      {message.sender === 'student' ? (
+                        <User className="h-4 w-4" />
+                      ) : (
+                        <Bot className="h-4 w-4" />
+                      )}
+                    </AvatarFallback>
+                  </Avatar>
                   
-                  {/* Suggested Actions */}
-                  {message.suggested_actions && message.suggested_actions.length > 0 && (
-                    <div className="mt-3 space-y-2">
-                      <p className="text-xs text-muted-foreground">Quick responses:</p>
-                      <div className="flex flex-wrap gap-2">
-                        {message.suggested_actions.map((action, index) => (
-                          <Button
-                            key={index}
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleSuggestedAction(action)}
-                            className="text-xs h-8"
-                          >
-                            {action}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  <p className={`text-xs mt-1 ${
-                    message.sender === 'student' 
-                      ? 'text-primary-foreground/70' 
-                      : 'text-muted-foreground'
+                  <div className={`rounded-lg p-3 ${
+                    message.sender === 'student'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted'
                   }`}>
-                    {formatTime(message.timestamp)}
-                    {sessionExpiry && message.sender === 'bot' && (
-                      <span className="ml-2 flex items-center">
-                        <Clock className="h-3 w-3 mr-1" />
-                        Expires: {sessionExpiry.toLocaleDateString()}
-                      </span>
+                    <p className="text-sm">{message.content}</p>
+                    
+                    {/* Suggested Actions */}
+                    {message.suggested_actions && message.suggested_actions.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-xs text-muted-foreground">Quick responses:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {message.suggested_actions.map((action, index) => (
+                            <Button
+                              key={index}
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleSuggestedAction(action)}
+                              className="text-xs h-6"
+                            >
+                              {action}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                  </p>
+                    
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {formatTime(message.timestamp)}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
 
-      {/* Message Input */}
-      <div className="bg-gradient-card border-t border-border shadow-soft">
-        <div className="container mx-auto px-4 py-4 max-w-4xl">
+          {/* Input */}
           <form onSubmit={handleSendMessage} className="flex space-x-3">
-            <div className="flex-1">
-              <Input
-                placeholder={t('chat.placeholder')}
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                className="h-12"
-                maxLength={1000}
-              />
-            </div>
-            <Button 
-              type="submit" 
-              disabled={!newMessage.trim()}
-              className="h-12 px-6"
-            >
+            <Input
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder="Type your message..."
+              className="flex-1"
+            />
+            <Button type="submit" disabled={!inputValue.trim()}>
               <Send className="h-4 w-4" />
-              <span className="hidden sm:block ml-2">{t('chat.send')}</span>
             </Button>
           </form>
-          
-          <div className="mt-2 text-center">
-            <p className="text-xs text-muted-foreground">
-              {t('chat.counselor_offline')}
-            </p>
-          </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

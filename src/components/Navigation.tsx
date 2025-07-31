@@ -21,7 +21,7 @@ export const Navigation: React.FC = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-                SafeTalk Kenya
+                SautiYetu Kenya
               </h1>
               <p className="text-xs text-muted-foreground">Anonymous & Safe</p>
             </div>
